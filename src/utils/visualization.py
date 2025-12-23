@@ -165,107 +165,74 @@ def plot_acf_scaled_grid(
 # src/utils/visualizations/price_plots.py
 
 def plot_price_overview(
-    raw_prices: Dict[str, pd.DataFrame],
+    raw_prices: dict,
     *,
-    price_col_candidates: Iterable[str] = (
-        "Adj Close",
-        "AdjClose",
-        "Close",
-        "close",
-        "adjclose",
-    ),
+    price_col: str = "Adj Close",
     normalize: bool = True,
-    join: str = "outer",          # "outer" or "inner"
-    base: float = 1.0,
-    figsize=(12, 6),
-    title: Optional[str] = None,
-    alpha: float = 0.9,
-    linewidth: float = 1.5,
-    legend: bool = True,
+    join: str = "outer",         # <-- key change
+    fill_method: str = "ffill",  # <-- key change
+    drop_all_nan: bool = True,
+    figsize=(12, 5),
+    title: str = "Normalized Price Overview",
 ):
     """
-    Build and plot a normalized price panel from load_prices_many output.
+    Plot normalized prices for a dict[ticker] -> OHLC dataframe.
 
-    Parameters
-    ----------
-    raw_prices : dict[str, pd.DataFrame]
-        Output of load_prices_many.
-    price_col_candidates : iterable[str]
-        Price column names to try (first match used).
-    normalize : bool
-        Normalize each series to `base` at its first valid observation.
-    join : {"outer","inner"}
-        How to align dates across assets.
-    base : float
-        Normalization base level (default 1.0).
+    Robust to different trading calendars (US vs SE vs funds) by using outer join and ffill.
     """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
 
-    if not raw_prices:
-        raise ValueError("raw_prices is empty")
-
-    series_list = []
-
-    # --- build price panel ---
-    for ticker, df in raw_prices.items():
-        if df is None or df.empty:
+    # build a panel of price series
+    series = {}
+    for tkr, df in raw_prices.items():
+        if df is None or getattr(df, "empty", False):
             continue
 
-        col = next((c for c in price_col_candidates if c in df.columns), None)
+        # handle MultiIndex columns or weird column sets gracefully
+        col = price_col if price_col in df.columns else ("Close" if "Close" in df.columns else None)
         if col is None:
-            raise ValueError(
-                f"{ticker}: none of {tuple(price_col_candidates)} found in columns "
-                f"{list(df.columns)}"
-            )
-
-        s = df[col].copy()
-
-        if not isinstance(s.index, pd.DatetimeIndex):
-            s.index = pd.to_datetime(s.index)
-
-        s = s.sort_index().dropna()
-
-        if s.empty:
             continue
 
-        if normalize:
-            s = base * s / s.iloc[0]
+        s = df[col].astype(float).copy()
+        s.name = tkr
+        series[tkr] = s
 
-        s.name = ticker
-        series_list.append(s)
+    if not series:
+        raise ValueError("No usable price series found.")
 
-    if not series_list:
-        raise RuntimeError("No valid price series after processing")
+    prices = pd.concat(series.values(), axis=1, join=join).sort_index()
 
-    price_panel = pd.concat(series_list, axis=1, join=join)
+    if fill_method == "ffill":
+        prices = prices.ffill()
+    elif fill_method == "bfill":
+        prices = prices.bfill()
+    elif fill_method is None:
+        pass
+    else:
+        raise ValueError("fill_method must be 'ffill', 'bfill', or None")
 
-    # --- plotting ---
+    if drop_all_nan:
+        prices = prices.dropna(how="all")
+
+    if normalize:
+        # normalize each column by its first non-NaN value (not a shared date)
+        base = prices.apply(lambda col: col.dropna().iloc[0] if col.notna().any() else np.nan)
+        prices = prices.divide(base, axis=1)
+
     fig, ax = plt.subplots(figsize=figsize)
-
-    for col in price_panel.columns:
-        ax.plot(
-            price_panel.index,
-            price_panel[col],
-            label=col,
-            alpha=alpha,
-            linewidth=linewidth,
-        )
-
+    prices.plot(ax=ax)
+    ax.set_title(title)
     ax.set_xlabel("Date")
     ax.set_ylabel("Normalized Price" if normalize else "Price")
-
-    if title is None:
-        title = "Normalized Price Overview" if normalize else "Price Overview"
-    ax.set_title(title)
-
-    ax.grid(True, alpha=0.3)
-
-    if legend:
-        ax.legend(ncol=2, fontsize=9)
-
+    ax.grid(alpha=0.3)
+    ax.legend(loc="best")
     plt.tight_layout()
     plt.show()
 
-    return price_panel
+    return prices
+
 
 
 
