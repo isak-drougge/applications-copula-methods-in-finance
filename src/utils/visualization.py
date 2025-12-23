@@ -864,6 +864,42 @@ def plot_return_vs_risk_progression(
 
 
 
+# def plot_portfolio_comparison_return_risk(
+#     portfolio_points: pd.DataFrame,
+#     *,
+#     rf_annual: Optional[float] = None,
+#     title: str = "Portfolio comparison: Return vs Risk",
+#     figsize=(8, 6),
+#     annotate: bool = True,
+# ):
+#     """
+#     portfolio_points: index=portfolio name, columns include ['ann_return','ann_vol'].
+#     """
+#     if portfolio_points is None or portfolio_points.empty:
+#         raise ValueError("portfolio_points is empty")
+
+#     fig, ax = plt.subplots(figsize=figsize)
+
+#     ax.scatter(portfolio_points["ann_vol"], portfolio_points["ann_return"], marker="x", s=140)
+
+#     if annotate:
+#         for name, row in portfolio_points.iterrows():
+#             ax.annotate(str(name), (row["ann_vol"], row["ann_return"]),
+#                         fontsize=10, xytext=(7, 5), textcoords="offset points")
+
+#     if rf_annual is not None:
+#         ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
+
+#     ax.set_xlabel("Annualized Volatility")
+#     ax.set_ylabel("Annualized Return (log-return approx.)")
+#     ax.set_title(title)
+#     ax.grid(True, alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+
+
+
+
 def plot_portfolio_comparison_return_risk(
     portfolio_points: pd.DataFrame,
     *,
@@ -871,28 +907,304 @@ def plot_portfolio_comparison_return_risk(
     title: str = "Portfolio comparison: Return vs Risk",
     figsize=(8, 6),
     annotate: bool = True,
+    # --- NEW: optionally compute + show correlation heatmaps beside the scatter ---
+    z_panel: Optional[pd.DataFrame] = None,
+    corr_assets: Optional[Iterable[str]] = None,
+    show_corr: bool = True,
+    corr_annot: bool = False,
+    corr_fmt: str = ".2f",
+    corr_vmin: float = -1.0,
+    corr_vmax: float = 1.0,
 ):
     """
-    portfolio_points: index=portfolio name, columns include ['ann_return','ann_vol'].
+    Scatter plot: annualized volatility (x) vs annualized return (y) for portfolio alternatives.
+
+    If z_panel is provided (standardized residuals panel), also shows Pearson/Spearman/Kendall
+    correlation heatmaps in the same figure (stacked on the right).
+
+    Parameters
+    ----------
+    portfolio_points : pd.DataFrame
+        index=portfolio name, columns include ['ann_return','ann_vol'].
+    z_panel : pd.DataFrame, optional
+        Standardized residuals panel (date × asset). Correlations computed from this.
+    corr_assets : Iterable[str], optional
+        Subset of assets/columns to include in correlation heatmaps. Defaults to all z_panel columns.
     """
     if portfolio_points is None or portfolio_points.empty:
         raise ValueError("portfolio_points is empty")
+    if "ann_vol" not in portfolio_points.columns or "ann_return" not in portfolio_points.columns:
+        raise ValueError("portfolio_points must have columns ['ann_vol','ann_return']")
 
-    fig, ax = plt.subplots(figsize=figsize)
+    # --- If no correlations requested / available, keep original behavior ---
+    use_corr = bool(show_corr and z_panel is not None and isinstance(z_panel, pd.DataFrame) and not z_panel.empty)
 
-    ax.scatter(portfolio_points["ann_vol"], portfolio_points["ann_return"], marker="x", s=140)
+    if not use_corr:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.scatter(portfolio_points["ann_vol"], portfolio_points["ann_return"], s=70)
+
+        if annotate:
+            for name, row in portfolio_points.iterrows():
+                ax.annotate(
+                    str(name),
+                    (row["ann_vol"], row["ann_return"]),
+                    fontsize=10,
+                    xytext=(7, 5),
+                    textcoords="offset points",
+                )
+
+        if rf_annual is not None:
+            ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
+
+        ax.set_xlabel("Annualized Volatility")
+        ax.set_ylabel("Annualized Return (log-return approx.)")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+        return
+
+    # --- Compute correlations from z_panel ---
+    if corr_assets is not None:
+        corr_assets = [a for a in corr_assets if a in z_panel.columns]
+        z_use = z_panel[corr_assets].dropna(how="all")
+    else:
+        z_use = z_panel.dropna(how="all")
+
+    pearson = z_use.corr(method="pearson")
+    spearman = z_use.corr(method="spearman")
+    kendall = z_use.corr(method="kendall")
+
+    import matplotlib.gridspec as gridspec
+
+    # Better default size when adding 3 heatmaps
+    if figsize == (8, 6):
+        figsize = (14, 8)
+
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(
+        nrows=3,
+        ncols=2,
+        width_ratios=[1.25, 1.0],
+        height_ratios=[1, 1, 1],
+        wspace=0.25,
+        hspace=0.35,
+    )
+
+    # --- Left: scatter spanning all rows ---
+    ax_scatter = fig.add_subplot(gs[:, 0])
+    ax_scatter.scatter(portfolio_points["ann_vol"], portfolio_points["ann_return"], s=70)
 
     if annotate:
         for name, row in portfolio_points.iterrows():
-            ax.annotate(str(name), (row["ann_vol"], row["ann_return"]),
-                        fontsize=10, xytext=(7, 5), textcoords="offset points")
+            ax_scatter.annotate(
+                str(name),
+                (row["ann_vol"], row["ann_return"]),
+                fontsize=10,
+                xytext=(7, 5),
+                textcoords="offset points",
+            )
 
     if rf_annual is not None:
-        ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
+        ax_scatter.axhline(rf_annual, linewidth=1.0, alpha=0.8)
 
-    ax.set_xlabel("Annualized Volatility")
-    ax.set_ylabel("Annualized Return (log-return approx.)")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
+    ax_scatter.set_xlabel("Annualized Volatility")
+    ax_scatter.set_ylabel("Annualized Return (log-return approx.)")
+    ax_scatter.set_title(title)
+    ax_scatter.grid(True, alpha=0.3)
+
+    # --- Right: heatmaps stacked (Pearson/Spearman/Kendall) ---
+    def _heatmap(ax, corr: pd.DataFrame, htitle: str):
+        labels = list(corr.columns)
+        mat = corr.values
+
+        im = ax.imshow(mat, vmin=corr_vmin, vmax=corr_vmax, cmap="RdYlGn", aspect="auto")
+        ax.set_title(htitle)
+
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+
+        if corr_annot:
+            for i in range(mat.shape[0]):
+                for j in range(mat.shape[1]):
+                    val = mat[i, j]
+                    if np.isfinite(val):
+                        ax.text(j, i, format(val, corr_fmt), ha="center", va="center", fontsize=8)
+
+        # individual colorbar like your existing plot_corr_heatmap
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label("Correlation")
+        return im
+
+    ax_p = fig.add_subplot(gs[0, 1])
+    ax_s = fig.add_subplot(gs[1, 1])
+    ax_k = fig.add_subplot(gs[2, 1])
+
+    _heatmap(ax_p, pearson, "Pearson correlation")
+    _heatmap(ax_s, spearman, "Spearman correlation")
+    _heatmap(ax_k, kendall, "Kendall correlation")
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+
+
+
+
+def plot_section5_portfolio_evaluation_rows(
+    port_points: pd.DataFrame,
+    log_returns: pd.DataFrame,
+    z_panel: pd.DataFrame,
+    portfolios: dict,
+    *,
+    rf_annual: float,
+    start: str,
+    end: str,
+    current_name: str = "Current",
+    show_performance: bool = True,
+    corr_methods: tuple[str, str, str] = ("pearson", "spearman", "kendall"),
+    corr_vmin: float = -1.0,
+    corr_vmax: float = 1.0,
+):
+    """
+    Row-per-alternative evaluation.
+
+    For each alternative portfolio P (excluding current_name), produce a row that compares:
+      - Markowitz point: Current vs P (only 2 points)
+      - Correlations on assets in (Current assets ∪ P assets), for pearson/spearman/kendall
+      - Optional: Normalized performance (Current vs P)
+    """
+
+    if current_name not in portfolios:
+        raise ValueError(f"current_name='{current_name}' not found in portfolios")
+
+    current_assets = set(portfolios[current_name].keys())
+    alt_names = [k for k in portfolios.keys() if k != current_name]
+    if not alt_names:
+        raise ValueError("No alternative portfolios found (portfolios only contains Current)")
+
+    # slice returns to window once
+    r = log_returns.copy()
+    if start is not None:
+        r = r.loc[r.index >= start]
+    if end is not None:
+        r = r.loc[r.index <= end]
+
+    # determine figure layout
+    n_rows = len(alt_names)
+    # columns: 1 markowitz + 3 corr + optional performance
+    n_corr = len(corr_methods)
+    n_cols = 1 + n_corr + (1 if show_performance else 0)
+
+    fig_w = 4.8 * n_cols
+    fig_h = 3.6 * n_rows
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h))
+
+    if n_rows == 1:
+        axes = np.array([axes])  # ensure 2D indexing
+
+    # helper: plot 2-point markowitz for a pair
+    def _plot_pair_markowitz(ax, name_alt: str):
+        # expects port_points indexed by portfolio name
+        if name_alt not in port_points.index or current_name not in port_points.index:
+            ax.axis("off")
+            ax.set_title("Missing port_points")
+            return
+
+        p_cur = port_points.loc[current_name]
+        p_alt = port_points.loc[name_alt]
+
+        ax.scatter([p_cur["ann_vol"]], [p_cur["ann_return"]], s=80, marker="o", label=current_name)
+        ax.scatter([p_alt["ann_vol"]], [p_alt["ann_return"]], s=80, marker="x", label=name_alt)
+
+        if rf_annual is not None:
+            ax.axhline(rf_annual, linewidth=1.0, alpha=0.7)
+
+        ax.set_xlabel("Vol")
+        ax.set_ylabel("Ret")
+        ax.set_title("Markowitz (2 points)")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+
+    # helper: plot corr heatmap
+    def _plot_corr(ax, corr_df: pd.DataFrame, title: str):
+        labels = list(corr_df.columns)
+        mat = corr_df.values
+        im = ax.imshow(mat, vmin=corr_vmin, vmax=corr_vmax, cmap="RdYlGn", aspect="auto")
+        ax.set_title(title, fontsize=10)
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        ax.set_yticklabels(labels, fontsize=8)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(labelsize=8)
+
+    # helper: performance plot
+    def _plot_pair_performance(ax, name_alt: str):
+        w_cur = pd.Series(portfolios[current_name], dtype=float)
+        w_alt = pd.Series(portfolios[name_alt], dtype=float)
+
+        # require both portfolios' assets exist in returns
+        cur_assets = list(w_cur.index)
+        alt_assets = list(w_alt.index)
+
+        miss_cur = [a for a in cur_assets if a not in r.columns]
+        miss_alt = [a for a in alt_assets if a not in r.columns]
+        if miss_cur or miss_alt:
+            ax.axis("off")
+            ax.set_title("Missing returns cols")
+            return
+
+        cur = np.exp((r[cur_assets] @ w_cur).cumsum())
+        alt = np.exp((r[alt_assets] @ w_alt).cumsum())
+
+        cur = cur / cur.iloc[0]
+        alt = alt / alt.iloc[0]
+
+        ax.plot(cur.index, cur.values, label=current_name, linewidth=2.0)
+        ax.plot(alt.index, alt.values, label=name_alt, linewidth=1.5)
+
+        ax.set_title("Normalized perf", fontsize=10)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+
+    for i, alt_name in enumerate(alt_names):
+        row_axes = axes[i, :]
+
+        # Row label on left margin-ish
+        row_axes[0].text(
+            -0.25, 0.5, f"{alt_name} vs {current_name}",
+            transform=row_axes[0].transAxes,
+            rotation=90, va="center", ha="center", fontsize=11, fontweight="bold"
+        )
+
+        # --- 1) Markowitz 2-point plot
+        _plot_pair_markowitz(row_axes[0], alt_name)
+
+        # --- 2) Correlations for ONLY (Current ∪ Alt assets)
+        assets = sorted(current_assets | set(portfolios[alt_name].keys()))
+        assets = [a for a in assets if a in z_panel.columns]
+        if len(assets) < 2:
+            # if not enough assets, blank corr panels
+            for j in range(n_corr):
+                ax = row_axes[1 + j]
+                ax.axis("off")
+                ax.set_title("Corr unavailable")
+        else:
+            z_sub = z_panel[assets].dropna(how="all")
+            for j, method in enumerate(corr_methods):
+                corr = z_sub.corr(method=method)
+                _plot_corr(row_axes[1 + j], corr, f"{method.title()} corr")
+
+        # --- 3) Optional performance (Current vs Alt)
+        if show_performance:
+            _plot_pair_performance(row_axes[-1], alt_name)
+
     plt.tight_layout()
     plt.show()

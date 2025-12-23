@@ -410,3 +410,39 @@ def compare_portfolios_markowitz(
 
     out = pd.DataFrame(rows).set_index("portfolio").sort_values("ann_vol")
     return out
+
+
+
+
+
+
+def compute_portfolio_cum_returns(
+    log_returns: pd.DataFrame,
+    weights: dict,
+    start: str | None = None,
+    end: str | None = None,
+    normalize: bool = True,
+):
+    """
+    Compute cumulative portfolio performance from log returns.
+
+    Returns
+    -------
+    pd.Series indexed by date
+    """
+    assets = list(weights.keys())
+    w = pd.Series(weights, dtype=float)
+
+    r = log_returns[assets]
+    if start is not None:
+        r = r.loc[r.index >= start]
+    if end is not None:
+        r = r.loc[r.index <= end]
+
+    port_log_ret = r @ w
+    cum = np.exp(port_log_ret.cumsum())
+
+    if normalize:
+        cum = cum / cum.iloc[0]
+
+    return cum

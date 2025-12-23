@@ -571,3 +571,26 @@ def dict_series_to_panel(
         df = df.sort_index()
 
     return df
+
+
+
+
+
+
+
+
+
+def build_corr_panel_relative_to_current(
+    z_panel: pd.DataFrame,
+    portfolios: dict,
+    current_name: str = "Current",
+):
+    """
+    Build z_panel sliced to assets appearing in Current + any alternative portfolios.
+    """
+    current_assets = set(portfolios[current_name].keys())
+    other_assets = set().union(*[w.keys() for w in portfolios.values()])
+    assets = sorted(current_assets | other_assets)
+
+    return z_panel[assets].dropna(how="all")
+
