@@ -1,4 +1,5 @@
 # src/utils/visualization.py
+from __future__ import annotations
 
 
 import math
@@ -707,19 +708,6 @@ def plot_return_vs_risk(
 
 
 
-def _blend_with_white(rgb, t: float):
-    """
-    t in [0,1]:
-      t=0 -> white
-      t=1 -> original rgb
-    """
-    r, g, b = rgb
-    return (1 - t) + t * r, (1 - t) + t * g, (1 - t) + t * b
-
-
-
-
-
 
 
 
@@ -727,14 +715,16 @@ def plot_return_vs_risk_progression(
     points_long: pd.DataFrame,
     *,
     rf_annual: Optional[float] = None,
-    title: str = "Return vs Risk (Progression)",
-    figsize=(8, 6),
+    title: str = "Return vs Risk (Grid)",
+    figsize=(12, 8),
+    cols: int = 3,                 # NEW: how many subplots per row
     plot_assets: bool = True,
     plot_portfolio: bool = True,
-    annotate_last: bool = True,
+    annotate: bool = False,        # NEW: annotate each subplot (off by default)
     alpha: float = 0.9,
     marker_size: float = 35.0,
     portfolio_marker_size: float = 120.0,
+    pad_frac: float = 0.06,        # NEW: padding around global limits
 ):
     if points_long is None or points_long.empty:
         raise ValueError("points_long is empty")
@@ -745,94 +735,160 @@ def plot_return_vs_risk_progression(
     if window_ids.size == 0:
         raise ValueError("No window_idx found")
 
-    # progression strength in [0.25..0.95]
-    if window_ids.size == 1:
-        strength_map = {int(window_ids[0]): 0.85}
-    else:
-        strengths = np.linspace(0.25, 0.95, num=window_ids.size)
-        strength_map = {int(w): float(s) for w, s in zip(window_ids, strengths)}
-
-    # base colors per asset (matplotlib default cycle)
+    # Base colors per asset (constant across all windows)
     assets_all = sorted(df["asset"].unique())
     prop_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
     if not prop_cycle:
         prop_cycle = ["C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
 
-    base_color_map = {}
-    for i, a in enumerate(assets_all):
-        base_color_map[a] = prop_cycle[i % len(prop_cycle)]
+    base_color_map = {a: prop_cycle[i % len(prop_cycle)] for i, a in enumerate(assets_all)}
 
-    def _blend_with_white(rgb, t: float):
-        r, g, b = rgb
-        return (1 - t) + t * r, (1 - t) + t * g, (1 - t) + t * b
+    # --- Compute GLOBAL axis limits so every subplot matches ---
+    dff = df.copy()
+    if not plot_portfolio:
+        dff = dff[dff["asset"] != "PORTFOLIO"]
+    if not plot_assets:
+        dff = dff[dff["asset"] == "PORTFOLIO"]
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if dff.empty:
+        raise ValueError("Nothing to plot after plot_assets/plot_portfolio filtering")
 
-    if rf_annual is not None:
-        ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
+    x_min, x_max = float(dff["ann_vol"].min()), float(dff["ann_vol"].max())
+    y_min, y_max = float(dff["ann_return"].min()), float(dff["ann_return"].max())
 
-    # plot each asset separately so it keeps its color across windows
-    for asset in assets_all:
-        sub = df[df["asset"] == asset]
-        if asset == "PORTFOLIO" and not plot_portfolio:
-            continue
-        if asset != "PORTFOLIO" and not plot_assets:
-            continue
+    # add padding
+    x_span = x_max - x_min
+    y_span = y_max - y_min
+    x_pad = pad_frac * (x_span if x_span > 0 else max(abs(x_max), 1e-8))
+    y_pad = pad_frac * (y_span if y_span > 0 else max(abs(y_max), 1e-8))
 
-        base = plt.matplotlib.colors.to_rgb(base_color_map[asset])
+    xlim = (x_min - x_pad, x_max + x_pad)
+    ylim = (y_min - y_pad, y_max + y_pad)
 
-        for w in window_ids:
-            strength = strength_map[int(w)]
-            color = _blend_with_white(base, strength)
+    # --- Make grid ---
+    n = int(window_ids.size)
+    rows = int(np.ceil(n / cols))
 
-            win = sub[sub["window_idx"] == w]
-            if win.empty:
-                continue
+    fig, axes = plt.subplots(rows, cols, figsize=figsize, sharex=True, sharey=True)
+    axes = np.array(axes).reshape(rows, cols)
 
-            if asset == "PORTFOLIO":
+    for idx, w in enumerate(window_ids):
+        r = idx // cols
+        c = idx % cols
+        ax = axes[r, c]
+
+        win = df[df["window_idx"] == w]
+
+        if rf_annual is not None:
+            ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
+
+        # Assets
+        if plot_assets:
+            assets = win[win["asset"] != "PORTFOLIO"]
+            for asset, sub in assets.groupby("asset"):
                 ax.scatter(
-                    win["ann_vol"].values,
-                    win["ann_return"].values,
+                    sub["ann_vol"].values,
+                    sub["ann_return"].values,
+                    s=marker_size,
+                    alpha=alpha,
+                    color=base_color_map.get(asset, "C0"),
+                )
+
+        # Portfolio
+        if plot_portfolio:
+            port = win[win["asset"] == "PORTFOLIO"]
+            if not port.empty:
+                ax.scatter(
+                    port["ann_vol"].values,
+                    port["ann_return"].values,
                     marker="x",
                     s=portfolio_marker_size,
                     alpha=alpha,
-                    color=[color],
-                )
-            else:
-                ax.scatter(
-                    win["ann_vol"].values,
-                    win["ann_return"].values,
-                    s=marker_size,
-                    alpha=alpha,
-                    color=[color],
+                    color=base_color_map.get("PORTFOLIO", "C3"),
                 )
 
-    # annotate last window only
-    if annotate_last:
-        last_w = int(window_ids.max())
-        last = df[df["window_idx"] == last_w]
+        # constant axes
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
 
-        if plot_assets:
-            for _, row in last[last["asset"] != "PORTFOLIO"].iterrows():
+        ax.grid(True, alpha=0.3)
+        ax.set_title(f"Window {w}", fontsize=10)
+
+        if annotate:
+            for _, row in win.iterrows():
                 ax.annotate(
                     str(row["asset"]),
                     (row["ann_vol"], row["ann_return"]),
-                    fontsize=9,
-                    xytext=(5, 3),
+                    fontsize=8,
+                    xytext=(4, 2),
                     textcoords="offset points",
                 )
 
-        if plot_portfolio:
-            port_last = last[last["asset"] == "PORTFOLIO"]
-            if not port_last.empty:
-                r0 = port_last.iloc[0]
-                ax.annotate(
-                    "PORTFOLIO",
-                    (r0["ann_vol"], r0["ann_return"]),
-                    fontsize=10,
-                    xytext=(7, 5),
-                    textcoords="offset points",
-                )
+    # turn off unused subplots
+    for j in range(n, rows * cols):
+        axes[j // cols, j % cols].axis("off")
+
+    # shared labels (only on outer edges)
+    for ax in axes[-1, :]:
+        if ax.has_data():
+            ax.set_xlabel("Annualized Volatility")
+    for ax in axes[:, 0]:
+        if ax.has_data():
+            ax.set_ylabel("Annualized Return (log-return approx.)")
+
+    fig.suptitle(title, y=0.995)
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# src/utils/visualization.py
+
+
+
+
+def plot_portfolio_comparison_return_risk(
+    portfolio_points: pd.DataFrame,
+    *,
+    rf_annual: Optional[float] = None,
+    title: str = "Portfolio comparison: Return vs Risk",
+    figsize=(8, 6),
+    annotate: bool = True,
+):
+    """
+    portfolio_points: index=portfolio name, columns include ['ann_return','ann_vol'].
+    """
+    if portfolio_points is None or portfolio_points.empty:
+        raise ValueError("portfolio_points is empty")
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.scatter(portfolio_points["ann_vol"], portfolio_points["ann_return"], marker="x", s=140)
+
+    if annotate:
+        for name, row in portfolio_points.iterrows():
+            ax.annotate(str(name), (row["ann_vol"], row["ann_return"]),
+                        fontsize=10, xytext=(7, 5), textcoords="offset points")
+
+    if rf_annual is not None:
+        ax.axhline(rf_annual, linewidth=1.0, alpha=0.8)
 
     ax.set_xlabel("Annualized Volatility")
     ax.set_ylabel("Annualized Return (log-return approx.)")

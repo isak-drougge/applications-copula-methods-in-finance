@@ -322,3 +322,91 @@ def flatten_window_points(
                 }
             )
     return pd.DataFrame(rows)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# src/utils/portfolio_analysis.py
+
+
+def compare_portfolios_markowitz(
+    log_returns: pd.DataFrame,
+    portfolios: Dict[str, Dict[str, float]],
+    *,
+    rf_annual: float,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    trading_days: int = 252,
+) -> pd.DataFrame:
+    """
+    Compare multiple portfolios on classic Markowitz coordinates:
+      (annualized return, annualized volatility), with risk-free leftover weight.
+
+    portfolios:
+      dict like {
+        "Current": {"AAPL":0.2, ...},
+        "Alt1":    {"AAPL":0.1, ...},
+      }
+    """
+    if log_returns is None or log_returns.empty:
+        raise ValueError("log_returns is empty")
+    if not portfolios:
+        raise ValueError("portfolios is empty")
+
+    df = log_returns.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    if start is not None:
+        df = df[df.index >= pd.to_datetime(start)]
+    if end is not None:
+        df = df[df.index <= pd.to_datetime(end)]
+
+    df = df.dropna(how="any")
+    if df.empty:
+        raise ValueError("No data left after filtering/dropna.")
+
+    cols = list(df.columns)
+    mu = df.mean().values
+    Sigma = df.cov().values
+    rf_daily = rf_annual / trading_days
+
+    rows = []
+    for name, wdict in portfolios.items():
+        w = np.array([float(wdict.get(c, 0.0)) for c in cols], dtype=float)
+        s = float(w.sum())
+        if s > 1.0 + 1e-10:
+            raise ValueError(f"Portfolio '{name}' weights sum to {s:.6f} > 1.")
+        w_rf = 1.0 - s
+
+        mu_p_daily = float(w_rf * rf_daily + w @ mu)
+        var_p_daily = float(w @ Sigma @ w)
+        vol_p_daily = float(np.sqrt(max(var_p_daily, 0.0)))
+
+        ann_ret = mu_p_daily * trading_days
+        ann_vol = vol_p_daily * np.sqrt(trading_days)
+
+        rows.append(
+            {
+                "portfolio": name,
+                "ann_return": ann_ret,
+                "ann_vol": ann_vol,
+                "w_rf": w_rf,
+            }
+        )
+
+    out = pd.DataFrame(rows).set_index("portfolio").sort_values("ann_vol")
+    return out
